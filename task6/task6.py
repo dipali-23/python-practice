@@ -1,34 +1,8 @@
 # Create a BankAccount class with methods for deposit, withdrawal, and balance
 # inquiry. Add a child class DepositAccount and SavingsAccount with interest calculation.
 
-# class BankAccount:
-#     balance=0
-#     def __init__(self,amount):
-#         self.balance=float(amount)
-#     def deposit(self,amount):
-#         self.balance+=float(amount)
-#     def withdrawal(self,amount):
-#         current=self.balance
-#         self.balance-=float(amount)
-#         if(self.balance<0):
-#             print(f"you cant withdraw {amount}Rs. your account has {current}Rs.")
-#             self.balance+=float(amount)
-#     def balanceInquiry(self):
-#         print(self.balance)
-#
-# b1=BankAccount(10000)
-# b1.deposit(500)
-#
-# b1.balanceInquiry()
-# b1.withdrawal(100000)
-# b1.balanceInquiry()
-#
-
-
-import datetime
 
 accounts = []
-
 
 class BankAccount:
     def __init__(self, aNumber, aHolder, balance=0.0):
