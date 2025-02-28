@@ -1,43 +1,50 @@
 from fastapi import FastAPI, Depends, HTTPException
 from sqlmodel import SQLModel, Session, select
 from database import engine, get_session
-from model import Project,Resource,ProjectResource
+from model import Project, Resource, ProjectResource
 from datetime import datetime
+
 app = FastAPI()
 
+
+# Initialize the database on startup
 @app.on_event("startup")
-def on_startup():
+def initialize_database():
     SQLModel.metadata.create_all(engine)
-# Create a project and auto-assign manager
+
+
+# Create a new project and assign a project manager
 @app.post("/projects/")
 def create_project(project: Project, session: Session = Depends(get_session)):
-    # Check if the project manager exists
+    # Validate if the project manager exists
     manager = session.exec(select(Resource).where(Resource.resource_id == project.project_manager_id)).first()
     if not manager:
         raise HTTPException(status_code=404, detail="Project manager does not exist")
 
-    # Create the project
+    # Add the new project to the database
     session.add(project)
     session.commit()
     session.refresh(project)
 
-    # Auto-create entry in ProjectResource table for the manager
-    project_resource = ProjectResource(
+    # Assign the manager to the project in the ProjectResource table
+    manager_assignment = ProjectResource(
         project_id=project.project_id,
         resource_id=project.project_manager_id,
-        onboard=project.startdate
+        onboard=project.start_date
     )
-    session.add(project_resource)
+    session.add(manager_assignment)
     session.commit()
-    # sessiion
+
     return project
 
-# Get all projects
+
+# Retrieve all projects
 @app.get("/projects/")
-def get_projects(session: Session = Depends(get_session)):
+def list_projects(session: Session = Depends(get_session)):
     return session.exec(select(Project)).all()
 
-# Create a resource
+
+# Create a new resource (employee)
 @app.post("/resources/")
 def create_resource(resource: Resource, session: Session = Depends(get_session)):
     session.add(resource)
@@ -45,26 +52,29 @@ def create_resource(resource: Resource, session: Session = Depends(get_session))
     session.refresh(resource)
     return resource
 
-# Get all resources
+
+# Retrieve all resources
 @app.get("/resources/")
-def get_resources(session: Session = Depends(get_session)):
+def list_resources(session: Session = Depends(get_session)):
     return session.exec(select(Resource)).all()
+
 
 # Assign a resource to a project
 @app.post("/project-resource/")
-def assign_resource(project_resource: ProjectResource, session: Session = Depends(get_session)):
-    # Check if resource exists
-    resource = session.exec(select(Resource).where(Resource.resource_id == project_resource.resource_id)).first()
+def assign_resource_to_project(assignment: ProjectResource, session: Session = Depends(get_session)):
+    # Validate if the resource exists
+    resource = session.exec(select(Resource).where(Resource.resource_id == assignment.resource_id)).first()
     if not resource:
         raise HTTPException(status_code=404, detail="Resource not found")
 
     # Assign resource to project
-    session.add(project_resource)
+    session.add(assignment)
     session.commit()
-    session.refresh(project_resource)
-    return project_resource
+    session.refresh(assignment)
+    return assignment
 
 
+# Update project status and handle resource offboarding
 @app.put("/projects/{project_id}/status/")
 def update_project_status(project_id: int, status: str, session: Session = Depends(get_session)):
     project = session.exec(select(Project).where(Project.project_id == project_id)).first()
@@ -72,62 +82,66 @@ def update_project_status(project_id: int, status: str, session: Session = Depen
         raise HTTPException(status_code=404, detail="Project not found")
 
     project.status = status
-
     if status == "completed":
-        project.enddate = datetime.utcnow()  # Set end date when project is completed
+        project.end_date = datetime.utcnow()
 
     session.commit()
 
     if status in ["completed", "onhold"]:
-        # Offboard all resources from this project
-        resources = session.exec(select(ProjectResource).where(ProjectResource.project_id == project_id)).all()
-        for res in resources:
-            res.offboard = datetime.utcnow()
-            session.add(res)
+        # Offboard all resources assigned to this project
+        assigned_resources = session.exec(select(ProjectResource).where(ProjectResource.project_id == project_id)).all()
+        for resource in assigned_resources:
+            resource.offboard = datetime.utcnow()
+            session.add(resource)
 
         session.commit()
         update_bench_resources(session)
 
     return {"message": f"Project status updated to {status}"}
 
-# If a resource is offboarded from all projects, mark as "bench"
+
+# Mark resources as "bench" if they are not assigned to any active projects
 def update_bench_resources(session: Session):
-    resources = session.exec(select(Resource)).all()
-    for resource in resources:
+    all_resources = session.exec(select(Resource)).all()
+    for resource in all_resources:
         active_projects = session.exec(
-            select(ProjectResource).where(ProjectResource.resource_id == resource.resource_id, ProjectResource.offboard == None)
+            select(ProjectResource).where(ProjectResource.resource_id == resource.resource_id,
+                                          ProjectResource.offboard == None)
         ).all()
 
-        if not active_projects:  # If no active projects
+        if not active_projects:
             resource.status = "bench"
             session.add(resource)
 
     session.commit()
 
-# Get bench resources
+
+# Retrieve all resources currently on the bench
 @app.get("/resources/bench/")
-def get_bench_resources(session: Session = Depends(get_session)):
+def list_bench_resources(session: Session = Depends(get_session)):
     return session.exec(select(Resource).where(Resource.status == "bench")).all()
 
 
+# Offboard a resource from a project
 @app.put("/project-resource/{record_id}/offboard/")
 def offboard_resource(record_id: int, session: Session = Depends(get_session)):
-    project_resource = session.exec(select(ProjectResource).where(ProjectResource.record_id == record_id)).first()
-    if not project_resource:
+    project_assignment = session.exec(select(ProjectResource).where(ProjectResource.record_id == record_id)).first()
+    if not project_assignment:
         raise HTTPException(status_code=404, detail="Project resource entry not found")
 
-    project_resource.offboard = datetime.utcnow()
+    project_assignment.offboard = datetime.utcnow()
     session.commit()
     return {"message": "Resource offboarded successfully"}
 
 
+# Retrieve all resources assigned to a specific project
 @app.get("/projects/{project_id}/resources/")
-def get_project_resources(project_id: int, session: Session = Depends(get_session)):
-    resources = session.exec(
+def list_project_resources(project_id: int, session: Session = Depends(get_session)):
+    assigned_resources = session.exec(
         select(Resource).join(ProjectResource).where(ProjectResource.project_id == project_id)
     ).all()
 
-    if not resources:
+    if not assigned_resources:
         raise HTTPException(status_code=404, detail="No resources found for this project")
 
-    return resources
+    return assigned_resources
